@@ -7,12 +7,23 @@ from math import cos
 from math import sin
 from math import radians
 from math import floor
-from numpy.linalg import norm
-from numpy import array
-from numpy.linalg import inv
+from math import degrees
 import numpy as np
 from angles import rectify_angle_pi
 from sensor_msgs.msg import LaserScan
+
+def compute_vel_from_angle(error):
+
+    #If error is greater than one, keep going the same speed
+    #else, slow down the robot as it approaches the target distance
+    if error > 1:
+        return .5
+    else:
+        temp_vel = error/2
+    if temp_vel < .1:
+        return .1
+    else:
+        return temp_vel
 
 def yaw_from_odom(msg):
     orientation_q = msg.pose.pose.orientation
@@ -58,7 +69,7 @@ class TurtlebotState:
             rate.sleep()
 
     def update_laser(self, scan):
-        rospy.loginfo("Scan done")
+        #rospy.loginfo("Scan done")
         self.ranges = list(scan.ranges)
         self.anginc = scan.angle_increment
         self.anglestart = scan.angle_min
@@ -93,14 +104,26 @@ class TurtlebotState:
         rospy.loginfo("Goodbye.")
 
 class Turn:
-    def __init__(self, state, angle):
-        if angle < 0:
-            self.direction = 'R'
-        else:
-            self.direction = 'L'
+    def __init__(self, state, angle):  # give target angle wrt global frame
         self.state = state
-        self.target_angle = rectify_angle_pi(state.angle + angle)
-        rospy.loginfo("Target angle: " + str(self.target_angle))
+
+        self.target_angle = angle
+
+        provisional = self.target_angle - self.state.angle
+
+        if provisional >= pi:
+            self.turn = provisional - 2 * np.pi
+
+        elif provisional <= -pi:
+            self.turn = provisional + 2 * np.pi
+        else:
+            self.turn = provisional
+        if self.turn > 0:
+            self.direction = 'L'
+        else:
+            self.direction = 'R'
+
+        self.target_angle = rectify_angle_pi(self.target_angle)
         self.done = False
         self.turning_angle = angle
 
@@ -108,7 +131,7 @@ class Turn:
         # if still not at target, compute the next move to make.
 
         error = abs(self.target_angle - self.state.angle)
-        rospy.loginfo("Current angle: " + str(self.state.angle))
+        #rospy.loginfo("Current angle: " + str(self.state.angle))
 
         if (error > .02):
             if self.direction == 'L':
@@ -124,7 +147,7 @@ class Turn:
             self.done = True
 
     def __str__(self):
-        print "Turned by " + str(self.turning_angle) + " radians"
+        print ("Turned by " + str(self.turning_angle) + " radians")
 
 rospy.init_node("Hough")
 state = TurtlebotState()
@@ -148,16 +171,32 @@ def fill_Hough_array(Hough_array, coordinate_array):
                 Hough_array[theta][rounded_index] += 1
     return Hough_array
 
-coor_array = make_coor_array()
-array = make_Hough_array()
-hough = fill_Hough_array(array, coor_array)
 rate = rospy.Rate(20)
 
 def turn_to_wall(Hough_array):
-    for r in xrange(0, 45):
-        for theta in xrange(0, 360):
-            if Hough_array[theta][r] >= 100:
-                action = Turn(state, radians(theta))
-                while not action.done:
-                    action.act()
-                    rate.sleep()
+    threshold = 120
+    Hough_array = np.array(Hough_array)
+    max_scores = np.max(Hough_array, axis=0)
+    print(str(max_scores))
+    for i in range(0, len(max_scores)):
+        if max_scores[i] >= threshold:
+            print(Hough_array[:,i])
+            theta = np.argmax(Hough_array[:,i])
+            if theta >= 270:
+                theta -= 360
+            print ("Wall at " + str(theta))
+            print ("I am facing " + str(degrees(state.angle)))
+            target_angle = radians(theta + 90)
+            action = Turn(state, target_angle)
+            while not action.done:
+                action.act()
+                rate.sleep()
+            return None
+
+
+if __name__ == "__main__":
+    coor_array = make_coor_array()
+    array = make_Hough_array()
+    hough = fill_Hough_array(array, coor_array)
+
+    turn_to_wall(array)
